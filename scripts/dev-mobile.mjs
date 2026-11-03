@@ -16,7 +16,6 @@ try {
   if (error?.code !== "ENOENT") throw error;
 }
 
-process.env.TWO_OF_US_MOBILE_DEV = "1";
 process.argv = [
   process.execPath,
   fileURLToPath(new URL("./run-framework.mjs", import.meta.url)),

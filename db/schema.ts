@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { check, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 export const profiles = sqliteTable("profiles", {
   userId: text("user_id").primaryKey(),
@@ -7,6 +7,27 @@ export const profiles = sqliteTable("profiles", {
   customName: text("custom_name"),
   email: text("email").notNull(),
   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export const accounts = sqliteTable("accounts", {
+  slot: integer("slot").primaryKey(),
+  userId: text("user_id").notNull().unique().references(() => profiles.userId),
+  email: text("email").notNull().unique(),
+  passwordHash: text("password_hash"),
+  invitationHash: text("invitation_hash").unique(),
+  invitationExpiresAt: integer("invitation_expires_at"),
+}, (table) => [check("two_account_slots", sql`${table.slot} IN (1, 2)`)]);
+
+export const sessions = sqliteTable("sessions", {
+  tokenHash: text("token_hash").primaryKey(),
+  userId: text("user_id").notNull().references(() => accounts.userId, { onDelete: "cascade" }),
+  expiresAt: integer("expires_at").notNull(),
+});
+
+export const authAttempts = sqliteTable("auth_attempts", {
+  key: text("key").primaryKey(),
+  count: integer("count").notNull(),
+  expiresAt: integer("expires_at").notNull(),
 });
 
 export const workspaceSettings = sqliteTable("workspace_settings", {

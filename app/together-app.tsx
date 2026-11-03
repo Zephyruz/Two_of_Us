@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowRight, CalendarDays, Check, ChevronRight, Heart, House, ImagePlus, Images, ListChecks, LoaderCircle, NotebookPen, Plus, RotateCcw, Settings2, Trash2, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ArrowRight, CalendarDays, Check, ChevronRight, Heart, House, ImagePlus, Images, ListChecks, LogOut, LoaderCircle, NotebookPen, Plus, RotateCcw, Settings2, Trash2, X } from "lucide-react";
 
 type Idea = { id: number; title: string; category: string; note: string; status: string; plannedDate: string | null; createdBy: string; createdAt: string };
 type Habit = { id: number; title: string; cadence: string; createdBy: string };
@@ -56,12 +56,42 @@ export default function TogetherApp({ displayName }: { displayName: string }) {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const [filter, setFilter] = useState("all");
-  const load = useCallback(async () => { const response = await fetch("/api/workspace", { cache: "no-store" }); const body = await response.json(); if (!response.ok) throw new Error(body.error || "读取失败"); setData(body); }, []);
-  useEffect(() => { load().catch((error) => setNotice(error.message)); }, [load]);
+  const mutation = useRef(false);
+  const loadVersion = useRef(0);
+  const load = useCallback(async () => {
+    const version = ++loadVersion.current;
+    const response = await fetch("/api/workspace", { cache: "no-store" });
+    if (response.status === 401) { window.location.replace("/login"); return; }
+    const body = await response.json() as Workspace & { error?: string };
+    if (!response.ok) throw new Error(body.error || "读取失败");
+    if (version === loadVersion.current) setData(body);
+  }, []);
+  useEffect(() => {
+    const refresh = () => { if (!document.hidden && !mutation.current) load().catch((error) => setNotice(error.message)); };
+    refresh();
+    const timer = window.setInterval(refresh, 15000);
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => { window.clearInterval(timer); window.removeEventListener("focus", refresh); document.removeEventListener("visibilitychange", refresh); };
+  }, [load]);
+  function beginMutation() {
+    if (mutation.current) return false;
+    mutation.current = true; ++loadVersion.current; setBusy(true); return true;
+  }
+  function endMutation() { mutation.current = false; setBusy(false); }
+  async function logout() {
+    if (!beginMutation()) return;
+    try {
+      const response = await fetch("/api/auth", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "logout" }) });
+      if (!response.ok) throw new Error("退出失败，请重试");
+      window.location.replace("/login");
+    } catch (error) { setNotice(error instanceof Error ? error.message : "退出失败"); }
+    finally { endMutation(); }
+  }
   async function act(payload: Record<string, unknown>, success?: string) {
-    setBusy(true);
-    try { const response = await fetch("/api/workspace", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }); const body = await response.json(); if (!response.ok) throw new Error(body.error || "保存失败"); await load(); setModal(null); if (success) { setNotice(success); window.setTimeout(() => setNotice(""), 2400); } }
-    catch (error) { setNotice(error instanceof Error ? error.message : "保存失败"); } finally { setBusy(false); }
+    if (!beginMutation()) return;
+    try { const response = await fetch("/api/workspace", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }); const body = await response.json() as { error?: string }; if (!response.ok) throw new Error(body.error || "保存失败"); await load(); setModal(null); if (success) { setNotice(success); window.setTimeout(() => setNotice(""), 2400); } }
+    catch (error) { setNotice(error instanceof Error ? error.message : "保存失败"); } finally { endMutation(); }
   }
   async function uploadPhotoFiles(memoryId: number, files: File[]) {
     if (!files.length) return;
@@ -69,31 +99,31 @@ export default function TogetherApp({ displayName }: { displayName: string }) {
     form.set("memoryId", String(memoryId));
     files.forEach((file) => form.append("photos", file));
     const response = await fetch("/api/memory-photos", { method: "POST", body: form });
-    const body = await response.json();
+    const body = await response.json() as { error?: string };
     if (!response.ok) throw new Error(body.error || "照片上传失败");
   }
   async function saveMemory(payload: Record<string, unknown>, files: File[]) {
-    setBusy(true);
+    if (!beginMutation()) return;
     try {
       const response = await fetch("/api/workspace", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
-      const body = await response.json();
+      const body = await response.json() as { error?: string; memory: { id: number } };
       if (!response.ok) throw new Error(body.error || "保存失败");
       let uploadError = "";
       if (files.length) { try { await uploadPhotoFiles(body.memory.id, files); } catch (error) { uploadError = error instanceof Error ? error.message : "照片上传失败"; } }
       await load(); setModal(null); setNotice(uploadError ? `记录已保存，但${uploadError}` : files.length ? "记录和照片已保存" : "记录已保存"); window.setTimeout(() => setNotice(""), 3200);
-    } catch (error) { setNotice(error instanceof Error ? error.message : "保存失败"); } finally { setBusy(false); }
+    } catch (error) { setNotice(error instanceof Error ? error.message : "保存失败"); } finally { endMutation(); }
   }
   async function addPhotos(memoryId: number, files: File[]) {
     if (!files.length) return;
-    setBusy(true);
+    if (!beginMutation()) return;
     try { await uploadPhotoFiles(memoryId, files); await load(); setNotice("照片已添加"); window.setTimeout(() => setNotice(""), 2400); }
-    catch (error) { setNotice(error instanceof Error ? error.message : "照片上传失败"); } finally { setBusy(false); }
+    catch (error) { setNotice(error instanceof Error ? error.message : "照片上传失败"); } finally { endMutation(); }
   }
   async function deletePhoto(photoId: number) {
     if (!window.confirm("删除这张照片？删除后无法恢复。")) return;
-    setBusy(true);
-    try { const response = await fetch(`/api/memory-photos?id=${photoId}`, { method: "DELETE" }); const body = await response.json(); if (!response.ok) throw new Error(body.error || "删除失败"); await load(); setNotice("照片已删除"); window.setTimeout(() => setNotice(""), 2400); }
-    catch (error) { setNotice(error instanceof Error ? error.message : "删除失败"); } finally { setBusy(false); }
+    if (!beginMutation()) return;
+    try { const response = await fetch(`/api/memory-photos?id=${photoId}`, { method: "DELETE" }); const body = await response.json() as { error?: string }; if (!response.ok) throw new Error(body.error || "删除失败"); await load(); setNotice("照片已删除"); window.setTimeout(() => setNotice(""), 2400); }
+    catch (error) { setNotice(error instanceof Error ? error.message : "删除失败"); } finally { endMutation(); }
   }
   const today = localDay();
   const me = data?.people.find((person) => person.userId === data.currentUserId);
@@ -109,18 +139,18 @@ export default function TogetherApp({ displayName }: { displayName: string }) {
     <header className="sticky top-0 z-20 border-b border-black/[.06] bg-[#f4f2ed]/90 backdrop-blur-xl"><div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-5 md:h-20 md:px-8">
       <button onClick={() => setTab("today")} className="flex items-center gap-3" aria-label="返回今天"><span className="relative flex h-8 w-11 items-center"><span className="absolute left-0 h-8 w-8 rounded-full bg-[#29332b]" /><span className="absolute right-0 h-8 w-8 rounded-full border-2 border-[#f4f2ed] bg-[#c77862]" /></span><span className="text-[17px] font-semibold tracking-[-0.03em]">两个人</span></button>
       <nav className="hidden items-center gap-1 rounded-full bg-white/60 p-1 md:flex">{nav.map(({ id, label }) => <button key={id} onClick={() => setTab(id)} className={`rounded-full px-5 py-2 text-sm transition ${tab === id ? "bg-white text-[#242622] shadow-sm" : "text-[#777a73] hover:text-[#242622]"}`}>{label}</button>)}</nav>
-      <button onClick={() => setModal({ type: "names" })} className="flex items-center gap-2 rounded-full p-1" aria-label="设置双方名字"><span className="flex items-center -space-x-2"><Avatar name={myDisplayName || displayName} dark /><Avatar name={partnerDisplayName} /></span><Settings2 size={17} className="text-[#858880]" /></button>
+      <div className="flex items-center gap-2"><button disabled={busy} onClick={() => setModal({ type: "names" })} className="flex items-center gap-2 rounded-full p-1" aria-label="设置双方名字"><span className="flex items-center -space-x-2"><Avatar name={myDisplayName || displayName} dark /><Avatar name={partnerDisplayName} /></span><Settings2 size={17} className="text-[#858880]" /></button><button disabled={busy} onClick={logout} aria-label="退出登录" title="退出登录" className="rounded-full p-2 text-[#858880] hover:bg-black/5"><LogOut size={18} /></button></div>
     </div></header>
-    <div className="mx-auto max-w-6xl px-5 pb-28 pt-7 md:px-8 md:pb-14 md:pt-11">
-      {tab === "today" && <Today data={data} planned={planned} today={today} me={me} partner={partner} myName={myDisplayName} partnerName={partnerDisplayName} doneToday={doneToday} onToggle={(habitId) => act({ action: "toggleHabit", habitId, day: today })} onOpenIdea={() => setModal({ type: "idea" })} onOpenHabit={() => setModal({ type: "habit" })} onComplete={(idea) => setModal({ type: "memory", idea })} />}
+    <fieldset disabled={busy} className="contents"><div className="mx-auto max-w-6xl px-5 pb-28 pt-7 md:px-8 md:pb-14 md:pt-11">
+      {tab === "today" && <Today data={data} planned={planned} today={today} me={me} partner={partner} myName={myDisplayName} partnerName={partnerDisplayName} doneToday={doneToday} onToggle={(habitId) => act({ action: "setHabitCheck", habitId, day: today, checked: !doneToday(habitId, data.currentUserId) })} onOpenIdea={() => setModal({ type: "idea" })} onOpenHabit={() => setModal({ type: "habit" })} onComplete={(idea) => setModal({ type: "memory", idea })} />}
       {tab === "ideas" && <Ideas items={openIdeas} people={data.people} filter={filter} setFilter={setFilter} onAdd={() => setModal({ type: "idea" })} onPlan={(idea) => setModal({ type: "schedule", idea })} onComplete={(idea) => setModal({ type: "memory", idea })} onDelete={(idea) => setModal({ type: "delete", target: { kind: "Idea", id: idea.id, title: idea.title } })} />}
-      {tab === "habits" && <Habits habits={data.habits} checks={data.checks} people={data.people} today={today} me={me} partner={partner} myName={myDisplayName} partnerName={partnerDisplayName} currentUserId={data.currentUserId} onAdd={() => setModal({ type: "habit" })} onToggle={(habitId) => act({ action: "toggleHabit", habitId, day: today })} onDelete={(habit) => setModal({ type: "delete", target: { kind: "Habit", id: habit.id, title: habit.title } })} />}
+      {tab === "habits" && <Habits habits={data.habits} checks={data.checks} people={data.people} today={today} me={me} partner={partner} myName={myDisplayName} partnerName={partnerDisplayName} currentUserId={data.currentUserId} onAdd={() => setModal({ type: "habit" })} onToggle={(habitId) => act({ action: "setHabitCheck", habitId, day: today, checked: !doneToday(habitId, data.currentUserId) })} onDelete={(habit) => setModal({ type: "delete", target: { kind: "Habit", id: habit.id, title: habit.title } })} />}
       {tab === "memories" && <Memories memories={data.memories} photos={data.memoryPhotos} people={data.people} onAdd={() => setModal({ type: "memory" })} onOpenPhotos={(memory) => setModal({ type: "gallery", memory })} onDelete={(memory) => setModal({ type: "delete", target: { kind: "Memory", id: memory.id, title: memory.title } })} />}
     </div>
     <button onClick={addForTab} className="fixed bottom-[88px] right-5 z-20 flex h-12 w-12 items-center justify-center rounded-full bg-[#29332b] text-white shadow-[0_10px_30px_rgba(41,51,43,.24)] md:bottom-8 md:right-8" aria-label="新增"><Plus size={21} /></button>
     <nav className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-4 border-t border-black/[.07] bg-[#faf9f6]/95 px-2 pb-[max(8px,env(safe-area-inset-bottom))] pt-2 backdrop-blur-xl md:hidden">{nav.map(({ id, label, icon: Icon }) => <button key={id} onClick={() => setTab(id)} className={`flex min-h-14 flex-col items-center justify-center gap-1 text-[11px] ${tab === id ? "text-[#29332b]" : "text-[#979990]"}`}><Icon size={20} strokeWidth={tab === id ? 2.2 : 1.7} /><span>{label}</span></button>)}</nav>
     {modal && <ModalSheet modal={modal} busy={busy} close={() => setModal(null)} submit={act} submitMemory={saveMemory} uploadPhotos={addPhotos} deletePhoto={deletePhoto} memoryPhotos={data.memoryPhotos} me={me} partner={partner} pendingPartnerName={data.pendingPartnerName} />}
-    {notice && <div role="status" className="fixed left-1/2 top-20 z-50 -translate-x-1/2 rounded-full bg-[#242622] px-4 py-2 text-sm text-white shadow-xl">{notice}</div>}
+    </fieldset>{notice && <div role="status" className="fixed left-1/2 top-20 z-50 -translate-x-1/2 rounded-full bg-[#242622] px-4 py-2 text-sm text-white shadow-xl">{notice}</div>}
   </main>;
 }
 
@@ -155,8 +185,8 @@ function Memories({ memories, photos, people, onAdd, onOpenPhotos, onDelete }: {
 function ModalSheet({ modal, busy, close, submit, submitMemory, uploadPhotos, deletePhoto, memoryPhotos, me, partner, pendingPartnerName }: { modal: Exclude<Modal, null>; busy: boolean; close: () => void; submit: (payload: Record<string, unknown>, success?: string) => void; submitMemory: (payload: Record<string, unknown>, files: File[]) => void; uploadPhotos: (memoryId: number, files: File[]) => void; deletePhoto: (photoId: number) => void; memoryPhotos: MemoryPhoto[]; me?: Person; partner?: Person; pendingPartnerName: string }) {
   const [title, setTitle] = useState(modal.type === "memory" && modal.idea ? modal.idea.title : ""); const [category, setCategory] = useState("go"); const [note, setNote] = useState(""); const [date, setDate] = useState(modal.type === "schedule" ? modal.idea.plannedDate || localDay() : localDay()); const [cadence, setCadence] = useState("每天");
   const [myName, setMyName] = useState(personName(me, "我")); const [partnerName, setPartnerName] = useState(personName(partner, pendingPartnerName || "TA"));
-  const [photos, setPhotos] = useState<File[]>([]); const [photoError, setPhotoError] = useState(""); const [previews, setPreviews] = useState<string[]>([]);
-  useEffect(() => { const urls = photos.map((file) => URL.createObjectURL(file)); setPreviews(urls); return () => urls.forEach((url) => URL.revokeObjectURL(url)); }, [photos]);
+  const [photos, setPhotos] = useState<File[]>([]); const [photoError, setPhotoError] = useState("");
+
 
   function selectedPhotos(list: FileList | null) {
     const files = Array.from(list || []);
@@ -188,7 +218,7 @@ function ModalSheet({ modal, busy, close, submit, submitMemory, uploadPhotos, de
   {modal.type === "habit" && <Field label="频率"><select value={cadence} onChange={(e) => setCadence(e.target.value)} className="form-control"><option>每天</option><option>工作日</option><option>每周三次</option><option>每周一次</option></select></Field>}
   {(modal.type === "schedule" || modal.type === "memory") && <Field label={modal.type === "schedule" ? "计划日期" : "发生日期"}><input type="date" value={date} onChange={(e) => setDate(e.target.value)} required className="form-control" /></Field>}
   {modal.type === "memory" && <Field label="想留下的话（可不填）"><textarea value={note} onChange={(e) => setNote(e.target.value)} placeholder="那天发生了什么？有什么想一起记住？" className="form-control min-h-28 resize-none" /></Field>}
-  {modal.type === "memory" && <Field label="照片（可不填）"><label className="flex cursor-pointer items-center justify-center gap-2 rounded-2xl border border-dashed border-black/15 bg-white/55 px-4 py-4 text-sm font-medium"><ImagePlus size={19} />选择照片<input type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif" multiple className="hidden" onChange={(event) => { const files = selectedPhotos(event.target.files); if (files.length) setPhotos(files); event.currentTarget.value = ""; }} /></label><p className="mt-2 text-xs leading-5 text-[#92958d]">每次最多选择 9 张，单张不超过 8 MB；保存后仍可继续添加。</p>{photoError && <p className="mt-2 text-sm text-[#a6473b]">{photoError}</p>}{previews.length > 0 && <div className="mt-3 grid grid-cols-3 gap-2">{previews.map((url, index) => <span key={url} className="relative aspect-square overflow-hidden rounded-xl bg-black/5"><img src={url} alt={`待上传照片 ${index + 1}`} className="h-full w-full object-cover" /><button type="button" onClick={() => setPhotos((items) => items.filter((_, photoIndex) => photoIndex !== index))} aria-label={`移除照片 ${index + 1}`} className="absolute right-1.5 top-1.5 flex h-7 w-7 items-center justify-center rounded-full bg-black/55 text-white"><X size={14} /></button></span>)}</div>}</Field>}
+  {modal.type === "memory" && <Field label="照片（可不填）"><label className="flex cursor-pointer items-center justify-center gap-2 rounded-2xl border border-dashed border-black/15 bg-white/55 px-4 py-4 text-sm font-medium"><ImagePlus size={19} />选择照片<input type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif" multiple className="hidden" onChange={(event) => { const files = selectedPhotos(event.target.files); if (files.length) setPhotos(files); event.currentTarget.value = ""; }} /></label><p className="mt-2 text-xs leading-5 text-[#92958d]">每次最多选择 9 张，单张不超过 8 MB；保存后仍可继续添加。</p>{photoError && <p className="mt-2 text-sm text-[#a6473b]">{photoError}</p>}{photos.length > 0 && <div className="mt-3 grid grid-cols-3 gap-2">{photos.map((file, index) => <span key={`${file.name}-${index}`} className="relative aspect-square overflow-hidden rounded-xl bg-black/5"><PhotoPreview file={file} index={index} /><button type="button" onClick={() => setPhotos((items) => items.filter((_, photoIndex) => photoIndex !== index))} aria-label={`移除照片 ${index + 1}`} className="absolute right-1.5 top-1.5 flex h-7 w-7 items-center justify-center rounded-full bg-black/55 text-white"><X size={14} /></button></span>)}</div>}</Field>}
   <button disabled={busy} className={`flex w-full items-center justify-center gap-2 rounded-full bg-[#29332b] px-5 py-3.5 font-medium text-white disabled:opacity-50 ${modal.type === "idea" ? "sticky bottom-0 shadow-[0_-12px_20px_#faf9f6]" : ""}`}>{busy && <LoaderCircle size={18} className="animate-spin" />}{modal.type === "idea" ? "添加" : modal.type === "habit" ? "添加" : modal.type === "schedule" ? "保存日期" : "保存记录"}</button>
   </form></section></div>;
 }
@@ -204,3 +234,13 @@ function TinyDot({ active }: { active: boolean }) { return <span className={`h-5
 function PersonStatus({ person, name, done }: { person?: Person; name: string; done: boolean }) { return <div className={`flex items-center gap-2 rounded-xl px-3 py-2.5 ${done ? "bg-[#e4ebe2] text-[#445344]" : "bg-[#efeee9] text-[#8a8d85]"}`}><span className={`flex h-6 w-6 items-center justify-center rounded-full text-[10px] ${done ? "bg-[#647462] text-white" : "bg-[#d9dad4]"}`}>{done ? <Check size={13} /> : name.slice(0, 1).toUpperCase()}</span><span className="truncate text-xs">{name} · {done ? "已完成" : person ? "还未打卡" : "等待加入"}</span></div>; }
 function Empty({ text, action, onClick, large = false }: { text: string; action: string; onClick: () => void; large?: boolean }) { return <div className={`flex flex-col items-start justify-center rounded-[24px] border border-dashed border-black/15 bg-white/30 ${large ? "min-h-[300px] p-8 md:p-12" : "min-h-44 p-6"}`}><NotebookPen className="mb-5 text-[#a3a59e]" strokeWidth={1.4} /><p className="max-w-sm text-[15px] leading-7 text-[#777a72]">{text}</p><button onClick={onClick} className="mt-5 flex items-center gap-1 text-sm font-medium">{action}<ChevronRight size={16} /></button></div>; }
 function Loading({ notice }: { notice: string }) { return <main className="flex min-h-dvh items-center justify-center bg-[#f4f2ed]"><div className="text-center"><span className="mx-auto mb-5 flex h-12 w-16 items-center justify-center"><span className="h-10 w-10 rounded-full bg-[#29332b]" /><span className="-ml-3 h-10 w-10 rounded-full border-2 border-[#f4f2ed] bg-[#c77862]" /></span><p className="text-sm text-[#777a73]">{notice || "正在打开两个人的空间…"}</p></div></main>; }
+
+function PhotoPreview({ file, index }: { file: File; index: number }) {
+  const image = useRef<HTMLImageElement>(null);
+  useEffect(() => {
+    const url = URL.createObjectURL(file);
+    if (image.current) image.current.src = url;
+    return () => URL.revokeObjectURL(url);
+  }, [file]);
+  return <img ref={image} alt={`待上传照片 ${index + 1}`} className="h-full w-full object-cover" />;
+}

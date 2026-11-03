@@ -44,11 +44,6 @@ export default defineConfig(async ({ command }) => {
   const { cloudflare } = await import("@cloudflare/vite-plugin");
 
   return {
-    define: {
-      __TWO_OF_US_MOBILE_DEV__: JSON.stringify(
-        process.env.TWO_OF_US_MOBILE_DEV === "1",
-      ),
-    },
     server: {
       ...(managedLinux
         ? { host: "0.0.0.0", allowedHosts: ["terminal.local"] }
@@ -59,7 +54,7 @@ export default defineConfig(async ({ command }) => {
     },
     plugins: [
       vinext(),
-      sites({ mockAuth: !managedLinux }),
+      sites({ mockAuth: false }),
       connectorPreview(),
       cloudflare({
         viteEnvironment: { name: "rsc", childEnvironments: ["ssr"] },
